@@ -59,6 +59,7 @@ class Player(BaseModel):
     expected_goals: float = 0.0
     expected_assists: float = 0.0
     expected_goal_involvements: float = 0.0
+    expected_goal_involvements_per_90: float = 0.0
     ict_index: float = 0.0
     status: str = "a"  # a=available, d=doubtful, i=injured, s=suspended, u=unavailable
 
