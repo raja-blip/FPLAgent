@@ -124,20 +124,37 @@ def _head_to_head_nudge(team_id: int, opponent_id: int, past_fixtures: list[Fixt
     return 1.0 + H2H_NUDGE_WEIGHT if relevant else 1.0
 
 
-def _score_output(player: Player, attack_boost: float) -> tuple[float, float]:
+MINUTES_PHASE_IN = 270  # ~3 full matches — full current-season weight beyond this
+
+
+def _score_output(
+    player: Player, attack_boost: float, last_season_rate: float
+) -> tuple[float, float]:
     """Expected goals and assists for this fixture, from blended output rate.
 
     Bug fixed here (found via a real dry-run producing ~30 points/player/
     gameweek, an order of magnitude too high): expected_goal_involvements
     is a SEASON-CUMULATIVE total, not a per-match rate — using it directly
-    as a single-fixture rate massively overstated every projection,
-    worse early in a season when it may still reflect a full prior
-    season's total. expected_goal_involvements_per_90 is the field FPL
-    actually provides for this purpose and is what belongs here.
+    as a single-fixture rate massively overstated every projection.
+    expected_goal_involvements_per_90 is the field FPL provides for this.
+
+    Second fix, same root cause: current-season data (both this rate and
+    'form') is meaningless before real minutes exist — pre-season, or
+    early on with few minutes played. This phases from last season's
+    per-90 rate to this season's own data as current-season minutes
+    accumulate, rather than trusting a near-zero current-season signal.
+    Both the underlying-output blend and the recent-form blend use the
+    same phase-in weight, since form is equally season-reset.
     """
-    underlying_rate = player.expected_goal_involvements_per_90
+    current_weight = min(player.minutes / MINUTES_PHASE_IN, 1.0)
+    underlying_rate = (
+        current_weight * player.expected_goal_involvements_per_90
+        + (1 - current_weight) * last_season_rate
+    )
+
     recent_signal = player.form / 5  # normalize FPL's 0-10ish form scale
-    blended = (0.6 * underlying_rate) + (0.4 * recent_signal)
+    form_weight = 0.4 * current_weight  # fades to 0 pre-season, same reasoning as above
+    blended = ((1 - form_weight) * underlying_rate) + (form_weight * recent_signal)
 
     goal_share = 0.55  # typical split of goal involvements that are goals vs assists
     xg = blended * goal_share * attack_boost
@@ -155,6 +172,7 @@ def project_gameweek_points(
     fixture: Fixture,
     teams_by_id: dict[int, Team],
     past_fixtures: list[Fixture],
+    last_season_rate: float = 0.0,
 ) -> float:
     """Expected points for one player in one fixture."""
     is_home = fixture.team_h == player.team
@@ -169,7 +187,7 @@ def project_gameweek_points(
     attack_boost, defence_boost = _opponent_strength_factor(team, opponent, is_home)
     h2h_nudge = _head_to_head_nudge(player.team, opponent_id, past_fixtures)
 
-    xg, xa = _score_output(player, attack_boost * h2h_nudge)
+    xg, xa = _score_output(player, attack_boost * h2h_nudge, last_season_rate)
     goal_pts = xg * GOAL_POINTS.get(player.element_type, 4)
     assist_pts = xa * ASSIST_POINTS
 
@@ -188,6 +206,7 @@ def build_xp_table(horizon_gameweeks: int = 4) -> pd.DataFrame:
     teams = {t.id: t for t in fpl_client.get_teams()}
     all_fixtures = fpl_client.get_all_fixtures()
     next_gw = fpl_client.get_next_gameweek()
+    last_season_rates = fpl_client.get_last_season_output_rates()
 
     if next_gw is None:
         raise RuntimeError("No upcoming gameweek found — is the season over?")
@@ -203,12 +222,13 @@ def build_xp_table(horizon_gameweeks: int = 4) -> pd.DataFrame:
 
     rows = []
     for player in players:
+        last_season_rate = last_season_rates.get(player.id, 0.0)
         current_gw_xp = 0.0
         rolling_xp = 0.0
         for i, gw_id in enumerate(target_gw_ids):
             fixtures_this_gw = fixtures_by_team_and_gw.get((player.team, gw_id), [])
             gw_total = sum(
-                project_gameweek_points(player, f, teams, past_fixtures)
+                project_gameweek_points(player, f, teams, past_fixtures, last_season_rate)
                 for f in fixtures_this_gw
             )
             if i == 0:
