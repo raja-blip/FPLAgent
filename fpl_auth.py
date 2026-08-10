@@ -21,6 +21,8 @@ import os
 
 import requests
 
+from network_utils import with_retry
+
 LOGIN_URL = "https://users.premierleague.com/accounts/login/"
 
 USER_AGENT = (
@@ -60,7 +62,10 @@ def login() -> requests.Session:
         "redirect_uri": "https://fantasy.premierleague.com/a/login",
     }
 
-    response = session.post(LOGIN_URL, data=payload, timeout=15)
+    response = with_retry(
+        lambda: session.post(LOGIN_URL, data=payload, timeout=15),
+        what="FPL login",
+    )
 
     # FPL's login doesn't return a clean JSON success/failure flag — a
     # successful login sets a session cookie, so that's what we check for
