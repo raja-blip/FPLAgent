@@ -12,6 +12,8 @@ import os
 
 import requests
 
+from network_utils import with_retry
+
 TELEGRAM_API = "https://api.telegram.org/bot{token}/sendMessage"
 
 
@@ -19,9 +21,12 @@ def send_message(text: str) -> None:
     token = os.environ["TELEGRAM_BOT_TOKEN"]
     chat_id = os.environ["TELEGRAM_CHAT_ID"]
 
-    response = requests.post(
-        TELEGRAM_API.format(token=token),
-        json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
-        timeout=10,
+    response = with_retry(
+        lambda: requests.post(
+            TELEGRAM_API.format(token=token),
+            json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
+            timeout=10,
+        ),
+        what="Telegram send_message",
     )
     response.raise_for_status()
