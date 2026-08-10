@@ -109,8 +109,17 @@ def _head_to_head_nudge(team_id: int, opponent_id: int, past_fixtures: list[Fixt
 
 
 def _score_output(player: Player, attack_boost: float) -> tuple[float, float]:
-    """Expected goals and assists for this fixture, from blended output rate."""
-    underlying_rate = player.expected_goal_involvements
+    """Expected goals and assists for this fixture, from blended output rate.
+
+    Bug fixed here (found via a real dry-run producing ~30 points/player/
+    gameweek, an order of magnitude too high): expected_goal_involvements
+    is a SEASON-CUMULATIVE total, not a per-match rate — using it directly
+    as a single-fixture rate massively overstated every projection,
+    worse early in a season when it may still reflect a full prior
+    season's total. expected_goal_involvements_per_90 is the field FPL
+    actually provides for this purpose and is what belongs here.
+    """
+    underlying_rate = player.expected_goal_involvements_per_90
     recent_signal = player.form / 5  # normalize FPL's 0-10ish form scale
     blended = (0.6 * underlying_rate) + (0.4 * recent_signal)
 
