@@ -11,13 +11,18 @@ from __future__ import annotations
 
 import requests
 
+from network_utils import with_retry
+
 TEAM_API = "https://fantasy.premierleague.com/api/my-team/{team_id}/"
 TRANSFERS_API = "https://fantasy.premierleague.com/api/transfers/"
 
 
 def get_current_squad(session: requests.Session, team_id: str) -> dict:
     """Your private squad, bank balance, and free transfers. Requires login()."""
-    response = session.get(TEAM_API.format(team_id=team_id), timeout=15)
+    response = with_retry(
+        lambda: session.get(TEAM_API.format(team_id=team_id), timeout=15),
+        what="get_current_squad",
+    )
     response.raise_for_status()
     return response.json()
 
@@ -52,7 +57,10 @@ def submit_transfers(
             for out_id, in_id in zip(transfers_out, transfers_in)
         ],
     }
-    response = session.post(TRANSFERS_API, json=payload, timeout=15)
+    response = with_retry(
+        lambda: session.post(TRANSFERS_API, json=payload, timeout=15),
+        what="submit_transfers",
+    )
     response.raise_for_status()
     return response.json()
 
@@ -76,8 +84,11 @@ def submit_lineup(
         for position, player_id in enumerate(starting_ids + bench_ids, start=1)
     ]
 
-    response = session.post(
-        TEAM_API.format(team_id=team_id), json={"picks": picks}, timeout=15
+    response = with_retry(
+        lambda: session.post(
+            TEAM_API.format(team_id=team_id), json={"picks": picks}, timeout=15
+        ),
+        what="submit_lineup",
     )
     response.raise_for_status()
     return response.json()
