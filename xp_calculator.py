@@ -81,6 +81,10 @@ def _opponent_strength_factor(team: Team, opponent: Team, is_home: bool) -> tupl
     player's own attacking output based on how weak/strong the opponent's
     defence is; defence_boost scales clean-sheet likelihood based on how
     weak/strong the opponent's attack is.
+
+    Falls back to a neutral (1.0) boost when strength data is missing —
+    early in a season, some teams' strength ratings come back null from
+    the live API rather than a real number.
     """
     if is_home:
         opp_defence = opponent.strength_defence_away
@@ -89,8 +93,8 @@ def _opponent_strength_factor(team: Team, opponent: Team, is_home: bool) -> tupl
         opp_defence = opponent.strength_defence_home
         opp_attack = opponent.strength_attack_home
 
-    attack_boost = LEAGUE_AVG_STRENGTH / max(opp_defence, 1)
-    defence_boost = LEAGUE_AVG_STRENGTH / max(opp_attack, 1)
+    attack_boost = LEAGUE_AVG_STRENGTH / opp_defence if opp_defence else 1.0
+    defence_boost = LEAGUE_AVG_STRENGTH / opp_attack if opp_attack else 1.0
     return attack_boost, defence_boost
 
 
