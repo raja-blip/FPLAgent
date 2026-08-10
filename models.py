@@ -18,13 +18,17 @@ class Team(BaseModel):
     id: int
     name: str
     short_name: str
-    strength: int
-    strength_overall_home: int
-    strength_overall_away: int
-    strength_attack_home: int
-    strength_attack_away: int
-    strength_defence_home: int
-    strength_defence_away: int
+    # These can be null early in a season (e.g. for newly-promoted teams
+    # or before FPL has enough data to calculate them) — the live API
+    # doesn't guarantee these are always populated, even though it
+    # looked that way from documentation and earlier-season examples.
+    strength: Optional[int] = None
+    strength_overall_home: Optional[int] = None
+    strength_overall_away: Optional[int] = None
+    strength_attack_home: Optional[int] = None
+    strength_attack_away: Optional[int] = None
+    strength_defence_home: Optional[int] = None
+    strength_defence_away: Optional[int] = None
 
 
 class Gameweek(BaseModel):
