@@ -37,6 +37,7 @@ import pandas as pd
 
 import fpl_client
 from models import Fixture, Team, Player
+from team_overrides import TEAM_OVERRIDES
 
 # Position-specific FPL scoring (2026/27 rules)
 GOAL_POINTS = {1: 10, 2: 6, 3: 5, 4: 4}  # GK, DEF, MID, FWD
@@ -85,6 +86,10 @@ def _opponent_strength_factor(team: Team, opponent: Team, is_home: bool) -> tupl
     Falls back to a neutral (1.0) boost when strength data is missing —
     early in a season, some teams' strength ratings come back null from
     the live API rather than a real number.
+
+    Applies TEAM_OVERRIDES on top of whatever FPL data exists (or the
+    neutral fallback) — see team_overrides.py for what these represent
+    and how to edit them.
     """
     if is_home:
         opp_defence = opponent.strength_defence_away
@@ -93,8 +98,19 @@ def _opponent_strength_factor(team: Team, opponent: Team, is_home: bool) -> tupl
         opp_defence = opponent.strength_defence_home
         opp_attack = opponent.strength_attack_home
 
-    attack_boost = LEAGUE_AVG_STRENGTH / opp_defence if opp_defence else 1.0
-    defence_boost = LEAGUE_AVG_STRENGTH / opp_attack if opp_attack else 1.0
+    override = TEAM_OVERRIDES.get(opponent.name, {})
+    defence_multiplier = override.get("defence", 1.0)  # <1.0 = weaker defence than rated
+    attack_multiplier = override.get("attack", 1.0)  # <1.0 = weaker attack than rated
+
+    effective_defence = (opp_defence * defence_multiplier) if opp_defence else None
+    effective_attack = (opp_attack * attack_multiplier) if opp_attack else None
+
+    attack_boost = (
+        LEAGUE_AVG_STRENGTH / effective_defence if effective_defence else 1.0 / defence_multiplier
+    )
+    defence_boost = (
+        LEAGUE_AVG_STRENGTH / effective_attack if effective_attack else 1.0 / attack_multiplier
+    )
     return attack_boost, defence_boost
 
 
