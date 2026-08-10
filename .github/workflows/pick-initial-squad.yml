@@ -1,0 +1,35 @@
+name: Pick initial squad
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Actually submit to your FPL account (unchecked = dry run, just shows the picks)"
+        type: boolean
+        default: false
+
+jobs:
+  pick-squad:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - name: Dry run (show picks only)
+        if: ${{ inputs.confirm != true }}
+        run: python scripts/pick_initial_squad.py
+        env:
+          FPL_REFRESH_TOKEN: ${{ secrets.FPL_REFRESH_TOKEN }}
+          FPL_TEAM_ID: ${{ secrets.FPL_TEAM_ID }}
+
+      - name: Submit for real
+        if: ${{ inputs.confirm == true }}
+        run: python scripts/pick_initial_squad.py --confirm
+        env:
+          FPL_REFRESH_TOKEN: ${{ secrets.FPL_REFRESH_TOKEN }}
+          FPL_TEAM_ID: ${{ secrets.FPL_TEAM_ID }}
