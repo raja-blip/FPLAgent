@@ -18,10 +18,14 @@ jobs:
       - name: DNS and connectivity diagnostic
         continue-on-error: true
         run: |
-          echo "--- DNS lookup: users.premierleague.com ---"
+          echo "--- DNS lookup (default resolver): users.premierleague.com ---"
           getent hosts users.premierleague.com || echo "DNS lookup FAILED"
-          echo "--- DNS lookup: fantasy.premierleague.com ---"
+          echo "--- DNS lookup (default resolver): fantasy.premierleague.com ---"
           getent hosts fantasy.premierleague.com || echo "DNS lookup FAILED"
+          echo "--- DNS lookup (Google 8.8.8.8): users.premierleague.com ---"
+          nslookup users.premierleague.com 8.8.8.8 || echo "DNS lookup FAILED via 8.8.8.8"
+          echo "--- DNS lookup (Cloudflare 1.1.1.1): users.premierleague.com ---"
+          nslookup users.premierleague.com 1.1.1.1 || echo "DNS lookup FAILED via 1.1.1.1"
           echo "--- HTTPS connectivity test ---"
           curl -sv --max-time 10 https://users.premierleague.com/ -o /dev/null 2>&1 | tail -20 || echo "Connection FAILED"
 
