@@ -19,6 +19,7 @@ from typing import Optional
 import requests
 
 from models import Fixture, Gameweek, Player, Team
+from network_utils import with_retry
 
 BASE_URL = "https://fantasy.premierleague.com/api"
 CACHE_DIR = Path(__file__).parent / ".cache"
@@ -40,7 +41,7 @@ def _cached_get(path: str, cache_key: str) -> dict | list:
 
     url = f"{BASE_URL}/{path}"
     try:
-        response = requests.get(url, timeout=10)
+        response = with_retry(lambda: requests.get(url, timeout=10), what=f"GET {path}")
         response.raise_for_status()
         data = response.json()
     except requests.RequestException as exc:
