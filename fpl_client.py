@@ -124,8 +124,9 @@ def get_last_season_output_rates() -> dict[int, float]:
 
     players = get_players()
     rates: dict[int, float] = {}
+    failures = 0
 
-    for player in players:
+    for i, player in enumerate(players):
         url = f"{BASE_URL}/element-summary/{player.id}/"
         try:
             response = with_retry(
@@ -134,8 +135,11 @@ def get_last_season_output_rates() -> dict[int, float]:
             )
             response.raise_for_status()
             data = response.json()
-        except requests.RequestException:
+        except requests.RequestException as exc:
+            failures += 1
             rates[player.id] = 0.0
+            if failures <= 5:  # don't flood the log if it's a widespread failure
+                print(f"  [last_season_rates] FAILED for {player.web_name} (id={player.id}): {exc}")
             continue
 
         history_past = data.get("history_past", [])
@@ -151,6 +155,16 @@ def get_last_season_output_rates() -> dict[int, float]:
             egi = 0.0
 
         rates[player.id] = (egi / minutes * 90) if minutes > 0 else 0.0
+
+        if (i + 1) % 100 == 0:
+            print(f"  [last_season_rates] {i + 1}/{len(players)} players processed...")
+
+        time.sleep(0.1)  # light pacing — FPL's infra has bot-detection; don't hammer it
+
+    print(
+        f"[last_season_rates] Done: {len(players) - failures}/{len(players)} succeeded, "
+        f"{failures} failed (defaulted to 0.0)."
+    )
 
     cache_file.write_text(json.dumps(rates))
     return rates
