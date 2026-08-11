@@ -60,6 +60,7 @@ class Player(BaseModel):
     expected_assists: float = 0.0
     expected_goal_involvements: float = 0.0
     expected_goal_involvements_per_90: float = 0.0
+    bonus: int = 0  # current-season cumulative bonus points
     ict_index: float = 0.0
     status: str = "a"  # a=available, d=doubtful, i=injured, s=suspended, u=unavailable
 
