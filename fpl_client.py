@@ -24,7 +24,7 @@ from network_utils import with_retry
 BASE_URL = "https://fantasy.premierleague.com/api"
 CACHE_DIR = Path(__file__).parent / ".cache"
 CACHE_TTL_SECONDS = 60 * 30  # 30 minutes — plenty fresh for gameweek planning
-SHRINKAGE_MINUTES = 450  # ~5 full matches — see get_last_season_output_rates()
+SHRINKAGE_MINUTES = 450  # ~5 full matches — see get_last_season_rates()
 
 
 class FPLClientError(Exception):
@@ -94,26 +94,38 @@ def get_all_fixtures() -> list[Fixture]:
     return [Fixture(**f) for f in get_fixtures()]
 
 
-def get_last_season_output_rates() -> dict[int, float]:
-    """Per-player last-season expected-goal-involvement rate, per 90 mins.
+def get_last_season_rates() -> dict[int, dict[str, float]]:
+    """Per-player last-season rates, per 90 minutes: expected-goal-
+    involvements AND bonus points.
 
-    FPL's live 'elements' data resets goals/assists/xG to zero at the
-    start of each season, so pre-season (and early season, before a
+    FPL's live 'elements' data resets goals/assists/xG/bonus to zero at
+    the start of each season, so pre-season (and early season, before a
     player's built up many minutes) there's no current-season signal at
     all to project from. This pulls each player's most recent past-season
-    totals via element-summary and computes a per-90 rate ourselves,
-    since history_past only has season-cumulative totals — confirmed via
-    a real diagnostic run, not assumed (see scripts/inspect_player_history.py).
+    totals via element-summary and computes per-90 rates ourselves, since
+    history_past only has season-cumulative totals — confirmed via a real
+    diagnostic run, not assumed (see scripts/inspect_player_history.py).
+
+    Bonus points matter here specifically because they were found to be
+    the biggest missing piece in a real calibration check: real FPL
+    disproportionately rewards standout individual performances via
+    bonus points (up to 3 extra for the match's best performers), and
+    without modeling that at all, elite and squad-depth players ended up
+    landing within ~2 points of each other over 4 gameweeks — clearly
+    wrong. history_past already has each player's actual bonus total
+    from last season, so this uses real data rather than a guessed
+    formula weight.
 
     Cached aggressively (180 days): this is historical data that only
     changes once a year at season rollover, and this makes one API call
     PER PLAYER (~700), which is slow enough you don't want to repeat it
-    on every run.
+    on every run — computing both rates in this single pass avoids
+    doubling that cost for the second metric.
 
-    Players with no history_past (new to the league — rookies, new
-    signings from outside the PL) get 0.0: an honest "no data" rather
-    than a guessed number. That does mean brand-new players are
-    underrated pre-season — a known, flagged limitation, not a silent one.
+    Players with no history_past (new to the league) get 0.0 for both:
+    an honest "no data" rather than a guessed number. That does mean
+    brand-new players are underrated pre-season — a known, flagged
+    limitation, not a silent one.
     """
     cache_file = CACHE_DIR / "last_season_rates.json"
     CACHE_DIR.mkdir(exist_ok=True, parents=True)
@@ -121,10 +133,11 @@ def get_last_season_output_rates() -> dict[int, float]:
     if cache_file.exists():
         age = time.time() - cache_file.stat().st_mtime
         if age < 60 * 60 * 24 * 180:  # 180 days
-            return {int(k): v for k, v in json.loads(cache_file.read_text()).items()}
+            raw = json.loads(cache_file.read_text())
+            return {int(k): v for k, v in raw.items()}
 
     players = get_players()
-    rates: dict[int, float] = {}
+    rates: dict[int, dict[str, float]] = {}
     failures = 0
 
     for i, player in enumerate(players):
@@ -138,14 +151,14 @@ def get_last_season_output_rates() -> dict[int, float]:
             data = response.json()
         except requests.RequestException as exc:
             failures += 1
-            rates[player.id] = 0.0
+            rates[player.id] = {"egi_per_90": 0.0, "bonus_per_90": 0.0}
             if failures <= 5:  # don't flood the log if it's a widespread failure
                 print(f"  [last_season_rates] FAILED for {player.web_name} (id={player.id}): {exc}")
             continue
 
         history_past = data.get("history_past", [])
         if not history_past:
-            rates[player.id] = 0.0
+            rates[player.id] = {"egi_per_90": 0.0, "bonus_per_90": 0.0}
             continue
 
         most_recent = history_past[-1]
@@ -154,8 +167,13 @@ def get_last_season_output_rates() -> dict[int, float]:
             egi = float(most_recent.get("expected_goal_involvements", 0.0) or 0.0)
         except (TypeError, ValueError):
             egi = 0.0
+        try:
+            bonus = float(most_recent.get("bonus", 0) or 0)
+        except (TypeError, ValueError):
+            bonus = 0.0
 
-        raw_rate = (egi / minutes * 90) if minutes > 0 else 0.0
+        raw_egi_rate = (egi / minutes * 90) if minutes > 0 else 0.0
+        raw_bonus_rate = (bonus / minutes * 90) if minutes > 0 else 0.0
 
         # Shrinkage toward 0 based on sample size — a rate computed from
         # 20 minutes (one lucky cameo goal) is noise, not signal, and was
@@ -165,7 +183,10 @@ def get_last_season_output_rates() -> dict[int, float]:
         # as trustworthy" knob — a player with minutes >> SHRINKAGE_MINUTES
         # keeps ~their raw rate; a player with only a handful of minutes
         # gets pulled hard toward 0 instead of extrapolated wildly.
-        rates[player.id] = (minutes * raw_rate) / (minutes + SHRINKAGE_MINUTES)
+        rates[player.id] = {
+            "egi_per_90": (minutes * raw_egi_rate) / (minutes + SHRINKAGE_MINUTES),
+            "bonus_per_90": (minutes * raw_bonus_rate) / (minutes + SHRINKAGE_MINUTES),
+        }
 
         if (i + 1) % 100 == 0:
             print(f"  [last_season_rates] {i + 1}/{len(players)} players processed...")
