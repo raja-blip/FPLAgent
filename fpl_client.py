@@ -24,6 +24,7 @@ from network_utils import with_retry
 BASE_URL = "https://fantasy.premierleague.com/api"
 CACHE_DIR = Path(__file__).parent / ".cache"
 CACHE_TTL_SECONDS = 60 * 30  # 30 minutes — plenty fresh for gameweek planning
+SHRINKAGE_MINUTES = 450  # ~5 full matches — see get_last_season_output_rates()
 
 
 class FPLClientError(Exception):
@@ -154,7 +155,17 @@ def get_last_season_output_rates() -> dict[int, float]:
         except (TypeError, ValueError):
             egi = 0.0
 
-        rates[player.id] = (egi / minutes * 90) if minutes > 0 else 0.0
+        raw_rate = (egi / minutes * 90) if minutes > 0 else 0.0
+
+        # Shrinkage toward 0 based on sample size — a rate computed from
+        # 20 minutes (one lucky cameo goal) is noise, not signal, and was
+        # producing absurd per-90 rates for fringe players (found via a
+        # real dry run: several ~£5m academy players outranking Haaland).
+        # SHRINKAGE_MINUTES acts as a "how much real playing time counts
+        # as trustworthy" knob — a player with minutes >> SHRINKAGE_MINUTES
+        # keeps ~their raw rate; a player with only a handful of minutes
+        # gets pulled hard toward 0 instead of extrapolated wildly.
+        rates[player.id] = (minutes * raw_rate) / (minutes + SHRINKAGE_MINUTES)
 
         if (i + 1) % 100 == 0:
             print(f"  [last_season_rates] {i + 1}/{len(players)} players processed...")
