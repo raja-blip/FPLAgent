@@ -13,6 +13,19 @@ a rolling 4-gameweek horizon, using:
   - a minutes/rotation-risk multiplier from chance_of_playing_next_round
     and recent minutes played, discounting rather than excluding, per our
     "moderate" rotation-risk rule
+  - an expected-bonus-points estimate, blended the same way as the
+    underlying output rate (last season's per-90 bonus rate, phased
+    toward this season's own data as real minutes accumulate)
+
+Bonus points were added after a real calibration check found the model
+without them couldn't separate elite players from squad depth at all —
+everyone landed within about 2 points of each other over 4 gameweeks,
+because appearance points and clean-sheet floor dominated the total and
+the goals/assists component wasn't enough on its own. Real FPL
+disproportionately rewards standout individual performances via bonus
+points (up to 3 extra for a match's best performers) — modeling that
+using each player's own actual last-season bonus rate (not a guessed
+formula weight) is what actually fixes the separation.
 
 Known simplification (flagged, not hidden): head-to-head only looks at
 *this season's* meetings via the fixtures endpoint. Early in the season
@@ -58,13 +71,20 @@ class GameweekProjection:
     xp: float
 
 
+MINUTES_CONFIDENCE_FULL = 900  # ~10 full matches — full confidence beyond this
+
+
 def _minutes_multiplier(player: Player) -> float:
     """Rough probability-of-meaningful-minutes factor.
 
-    Per our agreed "moderate" rotation-risk rule: only clearly-doubtful
-    players get excluded (upstream, in the optimizer) — here we just
-    discount xP smoothly, so a 75%-fit player shows up as a slightly
-    reduced option rather than disappearing from the pool entirely.
+    Bug fixed here (found via a real side-by-side comparison: a player
+    with 152 current-season minutes was getting the exact same 1.0
+    confidence as a stalwart with 2953): this used to jump straight from
+    a 0.3 floor (0 minutes) to full 1.0 confidence the instant a player
+    had ANY nonzero minutes, no matter how few. Now it scales smoothly
+    with actual minutes played, so someone with a handful of minutes
+    lands closer to the uncertain end, not treated as equally nailed-on
+    as an established starter.
     """
     if player.status in ("i", "s", "u"):
         return 0.0
@@ -72,7 +92,7 @@ def _minutes_multiplier(player: Player) -> float:
         return player.chance_of_playing_next_round / 100
     if player.minutes == 0:
         return 0.3  # unproven this season — steep discount, not zero
-    return 1.0
+    return 0.3 + 0.7 * min(player.minutes / MINUTES_CONFIDENCE_FULL, 1.0)
 
 
 def _opponent_strength_factor(team: Team, opponent: Team, is_home: bool) -> tuple[float, float]:
@@ -128,9 +148,9 @@ MINUTES_PHASE_IN = 270  # ~3 full matches — full current-season weight beyond 
 
 
 def _score_output(
-    player: Player, attack_boost: float, last_season_rate: float
-) -> tuple[float, float]:
-    """Expected goals and assists for this fixture, from blended output rate.
+    player: Player, attack_boost: float, last_season_egi_rate: float, last_season_bonus_rate: float
+) -> tuple[float, float, float]:
+    """Expected goals, assists, and bonus points for this fixture.
 
     Bug fixed here (found via a real dry-run producing ~30 points/player/
     gameweek, an order of magnitude too high): expected_goal_involvements
@@ -138,19 +158,28 @@ def _score_output(
     as a single-fixture rate massively overstated every projection.
     expected_goal_involvements_per_90 is the field FPL provides for this.
 
-    Second fix, same root cause: current-season data (both this rate and
-    'form') is meaningless before real minutes exist — pre-season, or
+    Second fix, same root cause: current-season data (rate, form, AND
+    bonus) is meaningless before real minutes exist — pre-season, or
     early on with few minutes played. This phases from last season's
-    per-90 rate to this season's own data as current-season minutes
+    per-90 rates to this season's own data as current-season minutes
     accumulate, rather than trusting a near-zero current-season signal.
-    Both the underlying-output blend and the recent-form blend use the
-    same phase-in weight, since form is equally season-reset.
+    Underlying-output, recent-form, AND bonus all use the same phase-in
+    weight, since all three are equally season-reset.
+
+    Bonus points are NOT scaled by attack_boost (unlike goals/assists) —
+    they're a broader "how good was this player's overall match" signal
+    (tackles, saves, general involvement count toward BPS too, not just
+    goal threat), so opponent attacking/defensive strength isn't as
+    direct a driver of it as it is for goal involvements specifically.
     """
     current_weight = min(player.minutes / MINUTES_PHASE_IN, 1.0)
     underlying_rate = (
         current_weight * player.expected_goal_involvements_per_90
-        + (1 - current_weight) * last_season_rate
+        + (1 - current_weight) * last_season_egi_rate
     )
+
+    current_bonus_rate = (player.bonus / player.minutes * 90) if player.minutes > 0 else 0.0
+    bonus_rate = current_weight * current_bonus_rate + (1 - current_weight) * last_season_bonus_rate
 
     recent_signal = player.form / 5  # normalize FPL's 0-10ish form scale
     form_weight = 0.4 * current_weight  # fades to 0 pre-season, same reasoning as above
@@ -159,7 +188,7 @@ def _score_output(
     goal_share = 0.55  # typical split of goal involvements that are goals vs assists
     xg = blended * goal_share * attack_boost
     xa = blended * (1 - goal_share) * attack_boost
-    return xg, xa
+    return xg, xa, bonus_rate
 
 
 def _clean_sheet_probability(defence_boost: float) -> float:
@@ -172,7 +201,8 @@ def project_gameweek_points(
     fixture: Fixture,
     teams_by_id: dict[int, Team],
     past_fixtures: list[Fixture],
-    last_season_rate: float = 0.0,
+    last_season_egi_rate: float = 0.0,
+    last_season_bonus_rate: float = 0.0,
 ) -> float:
     """Expected points for one player in one fixture."""
     is_home = fixture.team_h == player.team
@@ -187,7 +217,9 @@ def project_gameweek_points(
     attack_boost, defence_boost = _opponent_strength_factor(team, opponent, is_home)
     h2h_nudge = _head_to_head_nudge(player.team, opponent_id, past_fixtures)
 
-    xg, xa = _score_output(player, attack_boost * h2h_nudge, last_season_rate)
+    xg, xa, bonus_pts = _score_output(
+        player, attack_boost * h2h_nudge, last_season_egi_rate, last_season_bonus_rate
+    )
     goal_pts = xg * GOAL_POINTS.get(player.element_type, 4)
     assist_pts = xa * ASSIST_POINTS
 
@@ -196,7 +228,7 @@ def project_gameweek_points(
 
     appearance_pts = APPEARANCE_POINTS_60_MIN if minutes_mult > 0.6 else APPEARANCE_POINTS_UNDER_60
 
-    total = (goal_pts + assist_pts + cs_pts + appearance_pts) * minutes_mult
+    total = (goal_pts + assist_pts + cs_pts + bonus_pts + appearance_pts) * minutes_mult
     return round(total, 2)
 
 
@@ -206,7 +238,7 @@ def build_xp_table(horizon_gameweeks: int = 4) -> pd.DataFrame:
     teams = {t.id: t for t in fpl_client.get_teams()}
     all_fixtures = fpl_client.get_all_fixtures()
     next_gw = fpl_client.get_next_gameweek()
-    last_season_rates = fpl_client.get_last_season_output_rates()
+    last_season_rates = fpl_client.get_last_season_rates()
 
     if next_gw is None:
         raise RuntimeError("No upcoming gameweek found — is the season over?")
@@ -222,13 +254,17 @@ def build_xp_table(horizon_gameweeks: int = 4) -> pd.DataFrame:
 
     rows = []
     for player in players:
-        last_season_rate = last_season_rates.get(player.id, 0.0)
+        player_rates = last_season_rates.get(player.id, {})
+        last_season_egi_rate = player_rates.get("egi_per_90", 0.0)
+        last_season_bonus_rate = player_rates.get("bonus_per_90", 0.0)
         current_gw_xp = 0.0
         rolling_xp = 0.0
         for i, gw_id in enumerate(target_gw_ids):
             fixtures_this_gw = fixtures_by_team_and_gw.get((player.team, gw_id), [])
             gw_total = sum(
-                project_gameweek_points(player, f, teams, past_fixtures, last_season_rate)
+                project_gameweek_points(
+                    player, f, teams, past_fixtures, last_season_egi_rate, last_season_bonus_rate
+                )
                 for f in fixtures_this_gw
             )
             if i == 0:
