@@ -60,8 +60,24 @@ def select_squad(
     free_transfers: int = 1,
     xp_column: str = "rolling_4gw_xP",
     hit_margin: float = 0.0,
+    max_player_price: float | None = None,
 ) -> SquadResult:
     """Pick the 15-man squad maximizing rolling xP minus hit cost.
+
+    max_player_price: if set, excludes any player priced above this
+    from consideration entirely — a hard ceiling on any single squad
+    slot, regardless of that player's individual projection. Added to
+    test a real strategic question, not assumed either way: does
+    concentrating a big chunk of budget in one mega-premium (e.g.
+    Haaland) beat spreading it across several strong-but-cheaper
+    "premiums" instead? Real FPL evidence is genuinely split on this —
+    the 2024/25 world champion explicitly skipped Haaland to afford
+    several other premiums, but the 2022/23 champion captained Haaland
+    19 times en route to winning. Since the optimizer already maximizes
+    TOTAL squad points within budget, it should avoid a bad
+    concentration on its own if the model's projections are well
+    calibrated — this parameter exists to TEST that assumption via
+    backtest, not to encode a philosophy as fact.
 
     existing_squad_ids=None -> from-scratch build (e.g. pre-season), no
     transfer penalty. Existing squad given -> the weekly transfer decision.
@@ -96,6 +112,15 @@ def select_squad(
         prob += pulp.lpSum(x[i] for i in ids if by_id[i]["team"] == team) <= MAX_PER_TEAM
 
     prob += pulp.lpSum(x[i] * by_id[i]["price"] for i in ids) <= budget
+
+    if max_player_price is not None:
+        # Constrain rather than pre-filter — a player already OWNED
+        # who's over the cap still needs to exist in the model so the
+        # transfer/hit accounting below correctly counts selling them
+        # as a real transfer, not silently ignore it.
+        for i in ids:
+            if by_id[i]["price"] > max_player_price:
+                prob += x[i] == 0
 
     objective = pulp.lpSum(x[i] * by_id[i][xp_column] for i in ids)
 
@@ -145,8 +170,16 @@ def select_starting_xi(
     squad_ids: list[int],
     xp_df: pd.DataFrame,
     xp_column: str = "current_gameweek_xP",
+    incumbent_captain_id: int | None = None,
+    captain_switch_margin: float = 0.0,
 ) -> LineupResult:
-    """From a 15-man squad, pick the best valid starting XI, bench order, captain, and vice."""
+    """From a 15-man squad, pick the best valid starting XI, bench order, captain, and vice.
+
+    incumbent_captain_id / captain_switch_margin: see _pick_captain's
+    docstring — this is how last week's captain stays captain unless a
+    challenger's edge clears a real margin, rather than switching for
+    a fractional, likely-noise difference in projected points.
+    """
     squad_df = xp_df[xp_df["player_id"].isin(squad_ids)]
     by_id = {row["player_id"]: row for row in squad_df.to_dict("records")}
     ids = list(by_id.keys())
@@ -172,7 +205,9 @@ def select_starting_xi(
         reverse=True,
     )
 
-    captain_id, vice_captain_id = _pick_captain(starting_ids, by_id, xp_column)
+    captain_id, vice_captain_id = _pick_captain(
+        starting_ids, by_id, xp_column, incumbent_captain_id, captain_switch_margin
+    )
 
     return LineupResult(
         starting_ids=starting_ids,
@@ -183,21 +218,56 @@ def select_starting_xi(
 
 
 def _pick_captain(
-    starting_ids: list[int], by_id: dict[int, dict], xp_column: str
+    starting_ids: list[int],
+    by_id: dict[int, dict],
+    xp_column: str,
+    incumbent_captain_id: int | None = None,
+    switch_margin: float = 0.0,
 ) -> tuple[int, int]:
-    """Captain the single highest-projected scorer in the starting XI.
+    """Captain the highest-projected scorer among ELIGIBLE players in
+    the starting XI — unless that's not last week's captain and the
+    edge over the incumbent doesn't clear switch_margin, in which case
+    the incumbent stays captain.
 
-    This used to prefer an attacking position among the top 3 by xP, on
-    the theory that goal involvements give more ceiling than a
-    clean-sheet-driven defender/keeper score. A real 38-gameweek
-    backtest against the 2025/26 season found that heuristic actually
-    cost 33 points over the season — real weeks existed where a
-    defender or goalkeeper had the outright highest projection (a big
-    clean-sheet-plus-bonus haul) and the attacker-preference rule
-    overrode that for a lower-scoring attacker. Tested against a
-    trend-aware alternative too (blending in the 4-week rolling
-    projection); this simple version still won. Simplicity beat both
-    more elaborate versions on real, measured results — not a guess.
+    Eligibility rule (hard, not a soft preference): only FWD and MID
+    can ever be captain — GK and DEF are excluded entirely, no matter
+    how high their projection is for a given week. Added after a real
+    finding from the backtest: the model was captaining goalkeepers
+    (Kelleher for 4 straight weeks, Sels for the final 4) and defenders
+    (Gabriel across 7 different weeks) whenever they had a big
+    clean-sheet-plus-bonus week — something no real elite manager ever
+    does. The 2024/25 world champion's captain picks were 100% forwards
+    and attacking midfielders across the entire season (Salah, Palmer,
+    Son, Saka) — zero goalkeepers, zero defenders.
+
+    switch_margin (see also: xp_calculator.py's fix history for the
+    same style of noise-vs-signal reasoning): initially added on the
+    theory that switching captains for a marginal weekly edge is
+    chasing model noise, the same way this project has repeatedly
+    found and fixed elsewhere. A real backtest sweep found this made
+    results WORSE, not better (2190 at margin=0 vs. 2153-2171 at
+    margin=1-5) — the likely explanation is that real champions' captain
+    loyalty follows from genuinely having the best player in the
+    league, not from a rule that blocks switching; forcing stickiness
+    onto a less certain pool blocked real improvements more often than
+    it filtered noise. Left in (default 0.0, i.e. off) as a tested,
+    available option rather than removed, but not the current default.
     """
-    ranked = sorted(starting_ids, key=lambda i: by_id[i][xp_column], reverse=True)
-    return ranked[0], ranked[1]
+    ELIGIBLE_POSITIONS = (3, 4)  # MID, FWD only — never GK (1) or DEF (2)
+    eligible_ids = [i for i in starting_ids if by_id[i]["position"] in ELIGIBLE_POSITIONS]
+    ranked = sorted(eligible_ids, key=lambda i: by_id[i][xp_column], reverse=True)
+    top_pick = ranked[0]
+    runner_up = ranked[1]
+
+    if (
+        incumbent_captain_id is not None
+        and incumbent_captain_id in by_id
+        and by_id[incumbent_captain_id]["position"] in ELIGIBLE_POSITIONS
+        and incumbent_captain_id != top_pick
+    ):
+        edge = by_id[top_pick][xp_column] - by_id[incumbent_captain_id][xp_column]
+        if edge < switch_margin:
+            vice_captain_id = top_pick  # the challenger becomes vice instead
+            return incumbent_captain_id, vice_captain_id
+
+    return top_pick, runner_up
