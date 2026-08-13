@@ -61,8 +61,19 @@ def select_squad(
     xp_column: str = "rolling_4gw_xP",
     hit_margin: float = 0.0,
     max_player_price: float | None = None,
+    max_hits_remaining: int | None = None,
 ) -> SquadResult:
     """Pick the 15-man squad maximizing rolling xP minus hit cost.
+
+    max_hits_remaining: a HARD season-long budget on paid transfers,
+    separate from hit_margin. hit_margin biases each individual
+    decision (a soft cost adjustment) but never blocks a hit outright
+    if the projected gain is big enough. This is different and blunter
+    by design: once the season's hit budget is used up, no more hits
+    are allowed AT ALL this call, no matter how good the opportunity
+    looks — pass the caller's running total (e.g. 10 - hits already
+    taken this season) each time this is called. None means no cap
+    (relies on hit_margin alone, the previous default behavior).
 
     max_player_price: if set, excludes any player priced above this
     from consideration entirely — a hard ceiling on any single squad
@@ -129,6 +140,9 @@ def select_squad(
         transfers_made = pulp.lpSum((1 - x[i]) for i in existing)
         hits = pulp.LpVariable("hits", lowBound=0)
         prob += hits >= transfers_made - free_transfers
+        if max_hits_remaining is not None:
+            # Hard cap — the season's hit budget, not a cost/preference.
+            prob += hits <= max_hits_remaining
         # Real cost charged is still exactly HIT_COST (4) — hit_margin
         # only raises the bar the OPTIMIZER must clear to choose a hit,
         # not what actually gets deducted from the final score.
