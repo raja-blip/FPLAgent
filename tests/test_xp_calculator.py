@@ -102,8 +102,11 @@ def test_rolling_4gw_sums_across_fixtures(monkeypatch):
 def test_clean_sheet_points_differ_by_position(monkeypatch):
     team = make_team(1)
     weak_attack_opp = make_team(2, attack_home=900, attack_away=900)
-    gk = make_player(1, team=1, element_type=1, form=4.0, xgi=0.0, minutes=450)
-    mid = make_player(2, team=1, element_type=3, form=4.0, xgi=0.0, minutes=450)
+    # form=0 for both -- isolates the clean-sheet-points comparison
+    # cleanly, since form is (correctly, post-fix) only meaningful for
+    # MID/FWD, not GK.
+    gk = make_player(1, team=1, element_type=1, form=0.0, xgi=0.0, minutes=450)
+    mid = make_player(2, team=1, element_type=3, form=0.0, xgi=0.0, minutes=450)
     fixture = Fixture(id=1, event=1, team_h=1, team_a=2, team_h_difficulty=2,
                        team_a_difficulty=2, kickoff_time=None, finished=False)
 
@@ -117,6 +120,48 @@ def test_clean_sheet_points_differ_by_position(monkeypatch):
     mid_xp = df[df["player_id"] == 2].iloc[0]["current_gameweek_xP"]
     # GK gets 4 clean-sheet points vs MID's 1, with identical everything else
     assert gk_xp > mid_xp
+
+
+def test_form_does_not_inflate_attacking_rate_for_gk_or_def(monkeypatch):
+    # Direct reproduction of a real calibration bug: form used to be
+    # blended into the attacking-output rate for EVERY position. For a
+    # goalkeeper or defender, form reflects clean sheets/saves, not
+    # goal involvement -- verified directly against real 2025/26 season
+    # results (comparing model-implied season totals to real ones for
+    # 339 players): this was inflating goalkeepers by +53 points and
+    # defenders by +25 points on average, while midfielders/forwards
+    # were already well calibrated (-0.6 / -7.8). A goalkeeper with
+    # ZERO real attacking output but high recent form must show
+    # (near-)zero attacking output here, not a form-driven phantom rate.
+    team = make_team(1)
+    opp = make_team(2)
+    # xgi=0 (no real attacking output at all) but very high form --
+    # under the bug, this alone used to produce a large phantom
+    # goal-scoring rate for a GK.
+    gk_high_form_no_output = make_player(1, team=1, element_type=1, form=9.5, xgi=0.0, minutes=900)
+    def_high_form_no_output = make_player(2, team=1, element_type=2, form=9.5, xgi=0.0, minutes=900)
+    fixture = Fixture(id=1, event=1, team_h=1, team_a=2, team_h_difficulty=3,
+                       team_a_difficulty=3, kickoff_time=None, finished=False)
+
+    monkeypatch.setattr(
+        xp_calculator.fpl_client, "get_players", lambda: [gk_high_form_no_output, def_high_form_no_output]
+    )
+    monkeypatch.setattr(xp_calculator.fpl_client, "get_teams", lambda: [team, opp])
+    monkeypatch.setattr(xp_calculator.fpl_client, "get_all_fixtures", lambda: [fixture])
+    monkeypatch.setattr(xp_calculator.fpl_client, "get_next_gameweek", _next_gw)
+
+    df = xp_calculator.build_xp_table(horizon_gameweeks=1)
+    gk_xp = df[df["player_id"] == 1].iloc[0]["current_gameweek_xP"]
+    def_xp = df[df["player_id"] == 2].iloc[0]["current_gameweek_xP"]
+
+    # With zero real attacking output, the only points should be
+    # clean-sheet + appearance (+ bonus, which is 0 here) -- roughly
+    # 0.262*4 + 2 = ~3.05 for GK, same formula for DEF. Generous
+    # headroom (5.0) still catches the bug (which produced ~5.4+ from
+    # form-driven phantom goal points alone), without being a brittle
+    # exact-float assertion.
+    assert gk_xp < 5.0
+    assert def_xp < 5.0
 
 
 def test_handles_null_team_strength_from_live_api(monkeypatch):
