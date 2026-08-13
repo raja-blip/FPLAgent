@@ -1,0 +1,40 @@
+name: Execute (T-3h)
+
+# Runs every hour — wide enough to reliably catch the ~1-5h execute
+# window (see deadline_windows.py). execute.py checks the window and
+# no-ops if it's not the right time, or if this gameweek's already
+# been executed/stood-down — running this too often is harmless.
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch:  # for manual testing
+
+permissions:
+  contents: write  # needed to commit the updated state file back
+
+jobs:
+  execute:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - run: python execute.py
+        env:
+          FPL_REFRESH_TOKEN: ${{ secrets.FPL_REFRESH_TOKEN }}
+          FPL_TEAM_ID: ${{ secrets.FPL_TEAM_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+      - name: Commit state changes, if any
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          [ -f state/agent_state.json ] && git add state/agent_state.json || echo "no state file yet"
+          git diff --staged --quiet || git commit -m "Update agent state (execute run)"
+          git push
