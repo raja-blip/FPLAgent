@@ -164,14 +164,40 @@ def _score_output(
     early on with few minutes played. This phases from last season's
     per-90 rates to this season's own data as current-season minutes
     accumulate, rather than trusting a near-zero current-season signal.
-    Underlying-output, recent-form, AND bonus all use the same phase-in
-    weight, since all three are equally season-reset.
+    Underlying-output and bonus both use the same phase-in weight, since
+    both are equally season-reset.
 
     Bonus points are NOT scaled by attack_boost (unlike goals/assists) —
     they're a broader "how good was this player's overall match" signal
     (tackles, saves, general involvement count toward BPS too, not just
     goal threat), so opponent attacking/defensive strength isn't as
     direct a driver of it as it is for goal involvements specifically.
+
+    Third fix, found by directly validating this formula's OWN calibration
+    against real season-long results (comparing model-implied totals to
+    real ones for 339 players with real minutes): FPL's 'form' field was
+    being blended into the attacking-output rate for EVERY position,
+    worth 40% weight once a player had real minutes. For a midfielder or
+    forward this is a reasonable approximation, since their form genuinely
+    is driven mostly by goals and assists. For a goalkeeper or defender,
+    form is driven by clean sheets and saves instead — nothing to do with
+    goal involvement — yet it was being funneled in as if it were the
+    same signal. Combined with GK/DEF goals being worth much more than an
+    attacker's (a real goalkeeper goal is 10 points, a defender's is 6),
+    this turned a near-zero real attacking signal into a large phantom
+    goal-points total: verified directly — Pickford's real
+    expected_goal_involvements_per_90 was 0.0053 (correctly near zero),
+    but blending in his form added roughly 0.30 of spurious "attacking
+    rate", worth an extra ~1.6 points/match once multiplied by the
+    goalkeeper goal value, extrapolating to ~60 phantom points across a
+    season. This showed up as a real, measured bias: GK +53 points,
+    DEF +25 points on average, while MID (-0.6) and FWD (-7.8) were
+    already well calibrated — confirming the assumption holds for
+    attacking positions and breaks specifically for defensive ones. Fix:
+    only blend form into the attacking rate for MID/FWD (positions 3, 4).
+    GK/DEF rely purely on their real underlying goal-involvement rate,
+    which was already accurate on its own — the bug was entirely the
+    spurious addition, not the base rate.
     """
     current_weight = min(player.minutes / MINUTES_PHASE_IN, 1.0)
     underlying_rate = (
@@ -182,9 +208,12 @@ def _score_output(
     current_bonus_rate = (player.bonus / player.minutes * 90) if player.minutes > 0 else 0.0
     bonus_rate = current_weight * current_bonus_rate + (1 - current_weight) * last_season_bonus_rate
 
-    recent_signal = player.form / 5  # normalize FPL's 0-10ish form scale
-    form_weight = 0.4 * current_weight  # fades to 0 pre-season, same reasoning as above
-    blended = ((1 - form_weight) * underlying_rate) + (form_weight * recent_signal)
+    if player.element_type in (3, 4):  # MID, FWD only — see docstring
+        recent_signal = player.form / 5  # normalize FPL's 0-10ish form scale
+        form_weight = 0.4 * current_weight  # fades to 0 pre-season, same reasoning as above
+        blended = ((1 - form_weight) * underlying_rate) + (form_weight * recent_signal)
+    else:  # GK, DEF — form reflects clean sheets/saves, not goal involvement
+        blended = underlying_rate
 
     goal_share = 0.55  # typical split of goal involvements that are goals vs assists
     xg = blended * goal_share * attack_boost
@@ -193,7 +222,10 @@ def _score_output(
 
 
 def _clean_sheet_probability(defence_boost: float) -> float:
-    base_rate = 0.30  # rough league-average clean-sheet rate
+    # Verified directly against the real 2025/26 season's actual match
+    # data (1042 team-appearances, 273 clean sheets) — the true
+    # league-average rate is 0.262, not the previous 0.30 guess.
+    base_rate = 0.262
     return min(base_rate * defence_boost, 0.75)
 
 
