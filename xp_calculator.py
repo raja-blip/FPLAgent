@@ -49,6 +49,7 @@ from dataclasses import dataclass
 import pandas as pd
 
 import fpl_client
+from class_players import CLASS_PLAYERS
 from models import Fixture, Team, Player
 from team_overrides import TEAM_OVERRIDES
 
@@ -229,6 +230,16 @@ def project_gameweek_points(
     appearance_pts = APPEARANCE_POINTS_60_MIN if minutes_mult > 0.6 else APPEARANCE_POINTS_UNDER_60
 
     total = (goal_pts + assist_pts + cs_pts + bonus_pts + appearance_pts) * minutes_mult
+
+    # "Form is temporary, class is permanent" floor — see class_players.py.
+    # Only applies here, AFTER the minutes_mult==0 early return above, so
+    # a genuinely injured/suspended class player still correctly scores
+    # 0, never propped up by the floor. A slump while actually playing
+    # is exactly what this is meant to protect against, not unavailability.
+    floor = CLASS_PLAYERS.get(player.web_name)
+    if floor is not None and total < floor:
+        total = floor
+
     return round(total, 2)
 
 
@@ -242,6 +253,15 @@ def build_xp_table(horizon_gameweeks: int = 4) -> pd.DataFrame:
 
     if next_gw is None:
         raise RuntimeError("No upcoming gameweek found — is the season over?")
+
+    live_web_names = {p.web_name for p in players}
+    unmatched_class_players = [name for name in CLASS_PLAYERS if name not in live_web_names]
+    if unmatched_class_players:
+        print(
+            f"[xp_calculator] WARNING: class_players.py lists names not found among "
+            f"current players — floor will NOT apply for these: {unmatched_class_players}. "
+            f"Check for a typo, or a player who's since transferred/left the league."
+        )
 
     past_fixtures = [f for f in all_fixtures if f.finished]
     target_gw_ids = list(range(next_gw.id, next_gw.id + horizon_gameweeks))
