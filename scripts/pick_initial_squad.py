@@ -27,6 +27,9 @@ import optimizer  # noqa: E402
 import xp_calculator  # noqa: E402
 
 BUDGET = 100.0
+MAX_PLAYER_PRICE = 12.0  # backtest-proven: keeps budget spread across several
+                          # premiums instead of one mega-premium, +28 pts in
+                          # backtesting, robust across £11-14m (see optimizer.py)
 POSITION_NAMES = {1: "GK", 2: "DEF", 3: "MID", 4: "FWD"}
 
 
@@ -46,7 +49,9 @@ def main() -> None:
     xp_df = xp_calculator.build_xp_table(horizon_gameweeks=4)
 
     print("Selecting best 15-man squad within budget...")
-    squad_result = optimizer.select_squad(xp_df, budget=BUDGET, existing_squad_ids=None)
+    squad_result = optimizer.select_squad(
+        xp_df, budget=BUDGET, existing_squad_ids=None, max_player_price=MAX_PLAYER_PRICE
+    )
 
     print("Selecting starting XI, bench order, captain, and vice-captain...")
     lineup = optimizer.select_starting_xi(squad_result.squad_ids, xp_df)
