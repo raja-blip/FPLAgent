@@ -1,0 +1,42 @@
+name: Propose (T-24h)
+
+# Runs every 2 hours — wide enough to reliably catch the ~20-28h propose
+# window (see deadline_windows.py) regardless of exactly when each
+# gameweek's deadline falls, without needing a precisely-timed cron
+# expression that would have to change every week. propose.py itself
+# checks the window and no-ops if it's not the right time, or if this
+# gameweek's already been proposed — running this too often is harmless.
+on:
+  schedule:
+    - cron: "0 */2 * * *"
+  workflow_dispatch:  # for manual testing
+
+permissions:
+  contents: write  # needed to commit the updated state file back
+
+jobs:
+  propose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - run: python propose.py
+        env:
+          FPL_REFRESH_TOKEN: ${{ secrets.FPL_REFRESH_TOKEN }}
+          FPL_TEAM_ID: ${{ secrets.FPL_TEAM_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+      - name: Commit state changes, if any
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          [ -f state/agent_state.json ] && git add state/agent_state.json || echo "no state file yet"
+          git diff --staged --quiet || git commit -m "Update agent state (propose run)"
+          git push
