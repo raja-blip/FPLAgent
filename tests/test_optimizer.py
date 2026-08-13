@@ -185,6 +185,72 @@ def test_max_player_price_correctly_counts_selling_an_owned_expensive_player_as_
     assert result.hits_taken >= 1  # forcing the sale cost a real hit, correctly accounted for
 
 
+def test_max_hits_remaining_blocks_a_hit_even_when_the_gain_would_justify_it():
+    # A hard season-long budget, distinct from hit_margin (which only
+    # biases the decision but never blocks it outright). With the
+    # budget already exhausted (0 remaining), even a huge, obviously
+    # worthwhile swap must NOT be taken.
+    pool = make_basic_pool()
+    initial = optimizer.select_squad(pool, budget=100.0)
+
+    huge_standout = _pool_row(994, 3, 9, 5.5, 20.0)  # enormous gain, easily worth a hit normally
+    pool_with_standout = pd.concat([pool, pd.DataFrame([huge_standout])], ignore_index=True)
+
+    result = optimizer.select_squad(
+        pool_with_standout, budget=100.0,
+        existing_squad_ids=initial.squad_ids, free_transfers=0,
+        max_hits_remaining=0,
+    )
+
+    assert 994 not in result.squad_ids  # budget exhausted -> hit blocked regardless of value
+    assert result.hits_taken == 0
+
+
+def test_max_hits_remaining_allows_hits_up_to_the_budget():
+    pool = make_basic_pool()
+    initial = optimizer.select_squad(pool, budget=100.0)
+
+    standout_1 = _pool_row(993, 3, 9, 5.5, 9.0)
+    standout_2 = _pool_row(992, 2, 9, 4.5, 8.0)
+    pool_with_standouts = pd.concat(
+        [pool, pd.DataFrame([standout_1, standout_2])], ignore_index=True
+    )
+
+    # Budget of exactly 1 hit remaining, 0 free transfers -> can afford
+    # ONE of the two swaps (1 transfer = 1 hit), not both (2 transfers
+    # = 2 hits, which would exceed the budget).
+    result = optimizer.select_squad(
+        pool_with_standouts, budget=100.0,
+        existing_squad_ids=initial.squad_ids, free_transfers=0,
+        max_hits_remaining=1,
+    )
+
+    assert result.hits_taken <= 1
+
+
+def test_max_hits_remaining_none_means_no_cap():
+    # Default behavior (None) must be unaffected — relies on hit_margin
+    # alone, same as before this parameter existed.
+    pool = make_basic_pool()
+    initial = optimizer.select_squad(pool, budget=100.0)
+
+    standout_1 = _pool_row(991, 3, 9, 5.5, 9.0)
+    standout_2 = _pool_row(990, 2, 9, 4.5, 8.0)
+    pool_with_standouts = pd.concat(
+        [pool, pd.DataFrame([standout_1, standout_2])], ignore_index=True
+    )
+
+    result = optimizer.select_squad(
+        pool_with_standouts, budget=100.0,
+        existing_squad_ids=initial.squad_ids, free_transfers=0,
+        max_hits_remaining=None,
+    )
+
+    assert 991 in result.squad_ids
+    assert 990 in result.squad_ids
+    assert result.hits_taken == 2
+
+
 def test_starting_xi_respects_formation_rules():
     pool = make_basic_pool()
     squad_result = optimizer.select_squad(pool, budget=100.0)
