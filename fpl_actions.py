@@ -72,8 +72,24 @@ def submit_lineup(
     bench_ids: list[int],
     captain_id: int,
     vice_captain_id: int,
+    chip: str | None = None,
 ) -> dict:
-    """Submit starting XI, bench order, captain, and vice-captain in one call."""
+    """Submit starting XI, bench order, captain, and vice-captain in one call.
+
+    chip: one of "wildcard", "freehit", "bboost", "3xc" (FPL's own short
+    codes — see UNVERIFIED note below) to activate that chip alongside
+    this lineup submission, or None for a normal lineup-only submission.
+
+    UNVERIFIED — flagged plainly, same as fpl_auth.py was before its
+    first live test: this assumes chip activation works by including a
+    "chip" key in the same POST as picks, based on the general shape of
+    community-documented FPL bot projects, NOT confirmed against the
+    live endpoint ourselves. This has never been tested with a real
+    chip on a real account. Test with a low-stakes chip activation (or
+    at minimum a dry run you inspect closely) before trusting this for
+    real, especially for Wildcard/Free Hit, which can't be undone if
+    this sends something wrong.
+    """
     picks = [
         {
             "element": player_id,
@@ -84,9 +100,13 @@ def submit_lineup(
         for position, player_id in enumerate(starting_ids + bench_ids, start=1)
     ]
 
+    payload: dict = {"picks": picks}
+    if chip is not None:
+        payload["chip"] = chip
+
     response = with_retry(
         lambda: session.post(
-            TEAM_API.format(team_id=team_id), json={"picks": picks}, timeout=15
+            TEAM_API.format(team_id=team_id), json=payload, timeout=15
         ),
         what="submit_lineup",
     )
