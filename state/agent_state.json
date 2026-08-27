@@ -1,5 +1,88 @@
 {
   "season_hits_used": 0,
-  "chip_plan": null,
-  "gameweeks": {}
+  "chip_plan": {
+    "wildcard_gw": null,
+    "bench_boost_gw": null,
+    "triple_captain_gw": null,
+    "free_hit_gw": null
+  },
+  "gameweeks": {
+    "2": {
+      "proposed_at": 1787856573.139798,
+      "squad_before": [
+        1,
+        32,
+        4,
+        499,
+        427,
+        397,
+        557,
+        426,
+        368,
+        106,
+        490,
+        109,
+        223,
+        422,
+        87
+      ],
+      "transfers_in": [
+        10,
+        74,
+        136,
+        154,
+        279
+      ],
+      "transfers_out": [
+        32,
+        87,
+        397,
+        490,
+        557
+      ],
+      "proposed_squad": [
+        1,
+        4,
+        10,
+        74,
+        106,
+        109,
+        136,
+        154,
+        223,
+        279,
+        368,
+        422,
+        426,
+        427,
+        499
+      ],
+      "starting_ids": [
+        1,
+        10,
+        74,
+        106,
+        136,
+        154,
+        279,
+        368,
+        426,
+        427,
+        499
+      ],
+      "bench_ids": [
+        223,
+        4,
+        422,
+        109
+      ],
+      "captain_id": 154,
+      "vice_captain_id": 74,
+      "hits_taken": 4,
+      "chip": null,
+      "chip_needs_confirmation": false,
+      "chip_already_submitted": false,
+      "executed": false
+    }
+  }
 }
