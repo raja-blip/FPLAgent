@@ -47,6 +47,21 @@ HIT_MARGIN = 8.0
 MAX_PLAYER_PRICE = 12.0
 SEASON_HIT_BUDGET = 10
 
+# Per-gameweek hit cap — separate from SEASON_HIT_BUDGET above. The
+# season cap alone doesn't stop the optimizer front-loading many hits
+# in one early week (e.g. GW2, when the season budget is still fully
+# untouched) — it only bounds the running total, not the pacing.
+# Raj's stated policy: max 1 hit/week through GW5, then max 2/week
+# after that (early weeks have the least reliable data, so decisions
+# should be more conservative there).
+HITS_PER_GAMEWEEK_EARLY = 1
+HITS_PER_GAMEWEEK_LATE = 2
+EARLY_SEASON_CUTOFF_GW = 5  # GW6 onward is "late"
+
+
+def _max_hits_per_gameweek(gw_id: int) -> int:
+    return HITS_PER_GAMEWEEK_EARLY if gw_id <= EARLY_SEASON_CUTOFF_GW else HITS_PER_GAMEWEEK_LATE
+
 CHIP_API_CODES = {
     "wildcard": "wildcard",
     "free_hit": "freehit",
@@ -129,6 +144,7 @@ def main() -> None:
             xp_df, budget=100.0, existing_squad_ids=current_squad_ids,
             free_transfers=free_transfers, hit_margin=HIT_MARGIN,
             max_player_price=MAX_PLAYER_PRICE, max_hits_remaining=hits_remaining,
+            max_hits_per_gameweek=_max_hits_per_gameweek(next_gw.id),
         )
 
     lineup = optimizer.select_starting_xi(squad_result.squad_ids, xp_df)
