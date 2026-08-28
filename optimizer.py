@@ -62,6 +62,7 @@ def select_squad(
     hit_margin: float = 0.0,
     max_player_price: float | None = None,
     max_hits_remaining: int | None = None,
+    max_hits_per_gameweek: int | None = None,
 ) -> SquadResult:
     """Pick the 15-man squad maximizing rolling xP minus hit cost.
 
@@ -74,6 +75,15 @@ def select_squad(
     looks — pass the caller's running total (e.g. 10 - hits already
     taken this season) each time this is called. None means no cap
     (relies on hit_margin alone, the previous default behavior).
+
+    max_hits_per_gameweek: a HARD cap on paid transfers taken in THIS
+    single call, independent of the season budget above. Added because
+    the season cap alone doesn't stop the optimizer front-loading many
+    hits in one week early in the season (e.g. GW2, when the season
+    budget is still fully untouched) — it only stops the running total
+    exceeding the season limit eventually, not pacing within a single
+    week. None means no per-week cap (previous default behavior,
+    season cap and hit_margin are the only limits).
 
     max_player_price: if set, excludes any player priced above this
     from consideration entirely — a hard ceiling on any single squad
@@ -143,6 +153,12 @@ def select_squad(
         if max_hits_remaining is not None:
             # Hard cap — the season's hit budget, not a cost/preference.
             prob += hits <= max_hits_remaining
+        if max_hits_per_gameweek is not None:
+            # Hard cap — how many hits this SINGLE proposal can take,
+            # regardless of how much season budget remains. Prevents
+            # front-loading (e.g. burning 5 of 10 season hits in one
+            # early gameweek just because the budget allowed it).
+            prob += hits <= max_hits_per_gameweek
         # Real cost charged is still exactly HIT_COST (4) — hit_margin
         # only raises the bar the OPTIMIZER must clear to choose a hit,
         # not what actually gets deducted from the final score.
